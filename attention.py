@@ -182,7 +182,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
 
             ip_hidden_states_mask_out = ip_hidden_states_mask.repeat(1, 1, ip_hidden_states.shape[-1]).to(query.dtype)
         else:
-            ip_hidden_states_mask_out = 0.0
+            ip_hidden_states_mask_out = 1.0
 
         # combine text and ip branches
         hidden_states = self.scale_text * hidden_states + (self.scale_img * ip_hidden_states) * ip_hidden_states_mask_out
