@@ -91,6 +91,9 @@ def infer(
     seed: int = 42,
     start_from_image: bool = False,
     strength: float = 0.3,
+    scale_img: float = 1.0,
+    scale_text: float = 1.0,
+    debug: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seed(seed)
@@ -104,7 +107,7 @@ def infer(
 
     # replace attention processors
     cross_dim = unet.config.cross_attention_dim
-    replace_unet_attention(unet, cross_attention_dim=cross_dim, num_tokens=num_tokens, scale_img=1.0, scale_text=1.0)
+    replace_unet_attention(unet, cross_attention_dim=cross_dim, num_tokens=num_tokens, scale_img=scale_img, scale_text=scale_text)
     unet.to(device)
 
     # projection layer
@@ -113,10 +116,14 @@ def infer(
     # load checkpoint
     ckpt = torch.load(ckpt_path, map_location="cpu")
     if isinstance(ckpt, dict) and "unet" in ckpt and "ip_proj" in ckpt:
-        unet.load_state_dict(ckpt["unet"], strict=False)
-        ip_proj.load_state_dict(ckpt["ip_proj"], strict=False)
+        miss, unexp = unet.load_state_dict(ckpt["unet"], strict=False)
+        miss_ip, unexp_ip = ip_proj.load_state_dict(ckpt["ip_proj"], strict=False)
     else:
-        unet.load_state_dict(ckpt, strict=False)
+        miss, unexp = unet.load_state_dict(ckpt, strict=False)
+        miss_ip, unexp_ip = [], []
+    if debug:
+        print("unet missing:", miss, "unexpected:", unexp)
+        print("ip_proj missing:", miss_ip, "unexpected:", unexp_ip)
 
     # prepare inputs
     pixel_values = load_image(input_image).unsqueeze(0).to(device)
@@ -135,6 +142,8 @@ def infer(
 
         ip_tokens = get_ip_tokens(image_encoder, pixel_values_clip, num_tokens)
         ip_tokens = ip_proj(ip_tokens)
+        if debug:
+            print("ip_tokens norm:", ip_tokens.norm().item(), "text norm:", text_embeddings.norm().item())
         encoder_hidden_states = torch.cat([text_embeddings, ip_tokens], dim=1)
 
         # encode image latent
@@ -190,6 +199,9 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--start_from_image", action="store_true", help="Start sampling from input image latent (img2img)")
     parser.add_argument("--strength", type=float, default=0.3, help="Noise strength when starting from image")
+    parser.add_argument("--scale_img", type=float, default=1.0, help="Weight for IP branch")
+    parser.add_argument("--scale_text", type=float, default=1.0, help="Weight for text branch")
+    parser.add_argument("--debug", action="store_true", help="Print loading info and norms")
     return parser.parse_args()
 
 
@@ -206,4 +218,7 @@ if __name__ == "__main__":
         seed=args.seed,
         start_from_image=args.start_from_image,
         strength=args.strength,
+        scale_img=args.scale_img,
+        scale_text=args.scale_text,
+        debug=args.debug,
     )
