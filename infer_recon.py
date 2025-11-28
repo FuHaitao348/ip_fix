@@ -89,8 +89,6 @@ def infer(
     num_tokens: int = 4,
     num_steps: int = 50,
     seed: int = 42,
-    start_from_image: bool = False,
-    strength: float = 0.3,
     scale_img: float = 1.0,
     scale_text: float = 1.0,
     debug: bool = False,
@@ -159,25 +157,9 @@ def infer(
     )
     scheduler.set_timesteps(num_steps, device=device)
 
-    # prepare starting latents
-    if start_from_image:
-        # img2img-style: strength=0 -> no noise, strength=1 -> full noise
-        num_inference_steps = len(scheduler.timesteps)
-        t_start = min(num_inference_steps, max(0, int(num_inference_steps * strength)))
-        start_idx = num_inference_steps - t_start
-        start_idx = max(0, min(start_idx, num_inference_steps - 1))
-        init_timestep = scheduler.timesteps[start_idx]
-        noise = torch.randn_like(init_latents)
-        latents = scheduler.add_noise(init_latents, noise, init_timestep)
-        timesteps = scheduler.timesteps[start_idx:]
-        if debug:
-            print(f"start_from_image=True, strength={strength}, start_idx={start_idx}, timesteps={len(timesteps)}")
-    else:
-        latents = torch.randn(
-            (1, unet.config.in_channels, pixel_values.shape[-2] // 8, pixel_values.shape[-1] // 8),
-            device=device,
-        )
-        timesteps = scheduler.timesteps
+    # always start from image latent with no added noise
+    latents = init_latents
+    timesteps = scheduler.timesteps
 
     with torch.no_grad():
         for t in timesteps:
@@ -201,10 +183,8 @@ def parse_args():
     parser.add_argument("--num_tokens", type=int, default=4)
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--start_from_image", action="store_true", help="Start sampling from input image latent (img2img)")
-    parser.add_argument("--strength", type=float, default=0.3, help="Noise strength when starting from image")
     parser.add_argument("--scale_img", type=float, default=1.0, help="Weight for IP branch")
-    parser.add_argument("--scale_text", type=float, default=1.0, help="Weight for text branch")
+    parser.add_argument("--scale_text", type=float, default=0.0, help="Weight for text branch")
     parser.add_argument("--debug", action="store_true", help="Print loading info and norms")
     return parser.parse_args()
 
@@ -220,8 +200,6 @@ if __name__ == "__main__":
         num_tokens=args.num_tokens,
         num_steps=args.num_steps,
         seed=args.seed,
-        start_from_image=args.start_from_image,
-        strength=args.strength,
         scale_img=args.scale_img,
         scale_text=args.scale_text,
         debug=args.debug,
