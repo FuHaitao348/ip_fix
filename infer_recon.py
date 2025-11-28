@@ -89,6 +89,8 @@ def infer(
     num_tokens: int = 4,
     num_steps: int = 50,
     seed: int = 42,
+    start_from_image: bool = False,
+    strength: float = 0.3,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seed(seed)
@@ -135,8 +137,8 @@ def infer(
         ip_tokens = ip_proj(ip_tokens)
         encoder_hidden_states = torch.cat([text_embeddings, ip_tokens], dim=1)
 
-        # encode image to latent as a starting point? For generation from noise, sample noise
-        latents = torch.randn((1, unet.config.in_channels, pixel_values.shape[-2] // 8, pixel_values.shape[-1] // 8), device=device)
+        # encode image latent
+        init_latents = vae.encode(pixel_values).latent_dist.sample() * 0.18215
 
     scheduler = DDIMScheduler(
         num_train_timesteps=1000,
@@ -146,10 +148,26 @@ def infer(
         clip_sample=False,
         set_alpha_to_one=False,
     )
-    scheduler.set_timesteps(num_steps)
+    scheduler.set_timesteps(num_steps, device=device)
+
+    # prepare starting latents
+    if start_from_image:
+        # add noise according to strength
+        t_idx = int(len(scheduler.timesteps) * strength)
+        t_idx = min(t_idx, len(scheduler.timesteps) - 1)
+        init_timestep = scheduler.timesteps[t_idx]
+        noise = torch.randn_like(init_latents)
+        latents = scheduler.add_noise(init_latents, noise, init_timestep)
+        timesteps = scheduler.timesteps[: t_idx + 1]
+    else:
+        latents = torch.randn(
+            (1, unet.config.in_channels, pixel_values.shape[-2] // 8, pixel_values.shape[-1] // 8),
+            device=device,
+        )
+        timesteps = scheduler.timesteps
 
     with torch.no_grad():
-        for t in scheduler.timesteps:
+        for t in timesteps:
             model_output = unet(latents, t, encoder_hidden_states=encoder_hidden_states).sample
             latents = scheduler.step(model_output, t, latents).prev_sample
 
@@ -170,6 +188,8 @@ def parse_args():
     parser.add_argument("--num_tokens", type=int, default=4)
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--start_from_image", action="store_true", help="Start sampling from input image latent (img2img)")
+    parser.add_argument("--strength", type=float, default=0.3, help="Noise strength when starting from image")
     return parser.parse_args()
 
 
@@ -184,4 +204,6 @@ if __name__ == "__main__":
         num_tokens=args.num_tokens,
         num_steps=args.num_steps,
         seed=args.seed,
+        start_from_image=args.start_from_image,
+        strength=args.strength,
     )
