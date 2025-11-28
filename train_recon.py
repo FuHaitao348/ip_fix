@@ -57,7 +57,7 @@ class TrainConfig:
     max_train_steps: Optional[int] = None
     num_tokens: int = 4
     scale_img: float = 1.0
-    scale_text: float = 1.0
+    scale_text: float = 0.0
     seed: int = 42
     log_interval: int = 100
 
@@ -264,7 +264,7 @@ def parse_args():
     parser.add_argument("--max_train_steps", type=int, default=None)
     parser.add_argument("--num_tokens", type=int, default=4)
     parser.add_argument("--scale_img", type=float, default=1.0)
-    parser.add_argument("--scale_text", type=float, default=1.0)
+    parser.add_argument("--scale_text", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=100, help="Steps between writing loss to CSV")
     return parser.parse_args()
