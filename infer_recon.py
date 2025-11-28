@@ -161,13 +161,17 @@ def infer(
 
     # prepare starting latents
     if start_from_image:
-        # add noise according to strength
-        t_idx = int(len(scheduler.timesteps) * strength)
-        t_idx = min(t_idx, len(scheduler.timesteps) - 1)
-        init_timestep = scheduler.timesteps[t_idx]
+        # img2img-style: strength=0 -> no noise, strength=1 -> full noise
+        num_inference_steps = len(scheduler.timesteps)
+        t_start = min(num_inference_steps, max(0, int(num_inference_steps * strength)))
+        start_idx = num_inference_steps - t_start
+        start_idx = max(0, min(start_idx, num_inference_steps - 1))
+        init_timestep = scheduler.timesteps[start_idx]
         noise = torch.randn_like(init_latents)
         latents = scheduler.add_noise(init_latents, noise, init_timestep)
-        timesteps = scheduler.timesteps[: t_idx + 1]
+        timesteps = scheduler.timesteps[start_idx:]
+        if debug:
+            print(f"start_from_image=True, strength={strength}, start_idx={start_idx}, timesteps={len(timesteps)}")
     else:
         latents = torch.randn(
             (1, unet.config.in_channels, pixel_values.shape[-2] // 8, pixel_values.shape[-1] // 8),
