@@ -92,7 +92,7 @@ def infer(
     start_from_image: bool = True,
     strength: float = 0.0,
     scale_img: float = 1.0,
-    scale_text: float = 1.0,
+    scale_text: float = 0.0,
     debug: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
