@@ -174,7 +174,6 @@ def train(cfg: TrainConfig):
         dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True, drop_last=True
     )
 
-    total_steps = cfg.max_train_steps or math.ceil(len(dataloader) / cfg.gradient_accumulation_steps) * cfg.num_epochs
     global_step = 0
 
     os.makedirs(cfg.output_dir, exist_ok=True)
