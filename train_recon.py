@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import csv
 from dataclasses import dataclass
 from typing import Optional
 
@@ -58,6 +59,7 @@ class TrainConfig:
     scale_img: float = 1.0
     scale_text: float = 1.0
     seed: int = 42
+    log_interval: int = 100
 
 
 # ------------- 工具 -------------
@@ -176,6 +178,11 @@ def train(cfg: TrainConfig):
     global_step = 0
 
     os.makedirs(cfg.output_dir, exist_ok=True)
+    loss_log_path = os.path.join(cfg.output_dir, "loss_log.csv")
+    if not os.path.exists(loss_log_path):
+        with open(loss_log_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "epoch", "loss"])
 
     for epoch in range(cfg.num_epochs):
         epoch_bar = tqdm(dataloader, desc=f"epoch {epoch+1}/{cfg.num_epochs}", leave=False)
@@ -222,6 +229,11 @@ def train(cfg: TrainConfig):
 
             epoch_bar.set_postfix(loss=float(loss.detach()))
 
+            if global_step % cfg.log_interval == 0:
+                with open(loss_log_path, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([global_step, epoch + 1, float(loss.detach())])
+
             global_step += 1
             if cfg.max_train_steps and global_step >= cfg.max_train_steps:
                 break
@@ -254,6 +266,7 @@ def parse_args():
     parser.add_argument("--scale_img", type=float, default=1.0)
     parser.add_argument("--scale_text", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--log_interval", type=int, default=100, help="Steps between writing loss to CSV")
     return parser.parse_args()
 
 
@@ -275,5 +288,6 @@ if __name__ == "__main__":
         scale_img=args.scale_img,
         scale_text=args.scale_text,
         seed=args.seed,
+        log_interval=args.log_interval,
     )
     train(cfg)
