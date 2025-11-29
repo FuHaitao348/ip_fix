@@ -135,8 +135,11 @@ def infer(
     mask_tensor = None
     if mask_image:
         mask_img = Image.open(mask_image).convert("L")
-        mask_tensor = transforms.Resize(pixel_values.shape[-2:], interpolation=transforms.InterpolationMode.BILINEAR)(
-            transforms.ToTensor()(mask_img)
+        mask_tensor = transforms.ToTensor()(mask_img)
+        if mask_tensor.ndim == 3:
+            mask_tensor = mask_tensor.unsqueeze(0)  # (1,1,H,W)
+        mask_tensor = F.interpolate(
+            mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False
         ).to(device)
 
     with torch.no_grad():
@@ -182,8 +185,7 @@ def infer(
 
     # optional mask: blend input and output to visualize repaired region
     if mask_tensor is not None:
-        mask_resized = F.interpolate(mask_tensor, size=images.shape[-2:], mode="bilinear", align_corners=False)
-        images = images * mask_resized + pixel_values * (1 - mask_resized)
+        images = images * mask_tensor + pixel_values * (1 - mask_tensor)
 
     save_image(images, output_path)
 
