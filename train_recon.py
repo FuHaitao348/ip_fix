@@ -178,7 +178,7 @@ def train(cfg: TrainConfig):
     train_params = []
     for _, module in unet.attn_processors.items():
         for n, p in module.named_parameters():
-            if "to_k_ip" in n or "to_v_ip" in n:
+            if "to_k_ip" in n or "to_v_ip" in n or "lora" in n:
                 p.requires_grad_(True)
                 train_params.append(p)
             else:
