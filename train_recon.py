@@ -47,7 +47,7 @@ class TrainConfig:
     image_encoder_path: str = "models/clip-vit-large-patch14"
     train_data_dir: str = "ffhq256"
     output_dir: str = "outputs/recon_stage1"
-    batch_size: int = 4
+    batch_size: int = 16
     num_workers: int = 4
     lr: float = 1e-4
     weight_decay: float = 0.01
@@ -253,7 +253,7 @@ def parse_args():
     )
     parser.add_argument("--train_data_dir", type=str, default="ffhq256", help="FFHQ256 root directory")
     parser.add_argument("--output_dir", type=str, default="outputs/recon_stage1")
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
