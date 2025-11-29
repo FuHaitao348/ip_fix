@@ -172,16 +172,32 @@ def infer(
     )
     scheduler.set_timesteps(num_steps, device=device)
 
-    # img2img-style: add noise proportional to strength
-    latents = init_latents
-    if strength > 0:
-        t_start = int(strength * len(scheduler.timesteps))
-        t_start = min(len(scheduler.timesteps) - 1, max(0, t_start))
-        noise = torch.randn_like(latents)
-        latents = scheduler.add_noise(latents, noise, scheduler.timesteps[t_start])
-        timesteps = scheduler.timesteps[: t_start + 1]
-    else:
-        timesteps = scheduler.timesteps[:1]  # almost no change
+    # DDIM inversion: forward from t=0 to t_max using deterministic DDIM formula
+    timesteps_desc = scheduler.timesteps  # high -> low
+    timesteps_asc = timesteps_desc.flip(0)  # low -> high
+    alphas = scheduler.alphas_cumprod.to(device)
+
+    latents_fwd = [init_latents]
+    with torch.no_grad():
+        for i in range(len(timesteps_asc) - 1):
+            t = timesteps_asc[i]
+            t_next = timesteps_asc[i + 1]
+            alpha_t = alphas[t]
+            alpha_next = alphas[t_next]
+            eps = unet(latents_fwd[-1], t, encoder_hidden_states=encoder_hidden_states).sample
+            lat_t = latents_fwd[-1]
+            lat_next = (
+                torch.sqrt(alpha_next / alpha_t) * (lat_t - torch.sqrt(1 - alpha_t) * eps)
+                + torch.sqrt(1 - alpha_next) * eps
+            )
+            latents_fwd.append(lat_next)
+
+    # choose start point based on strength
+    steps_total = len(timesteps_desc)
+    steps_to_denoise = max(1, int(steps_total * strength))
+    start_idx = steps_total - steps_to_denoise
+    latents = latents_fwd[start_idx]
+    timesteps = timesteps_desc[start_idx:]
 
     with torch.no_grad():
         # latent mask for preserving non-defect region (if mask provided)
@@ -189,11 +205,13 @@ def infer(
         if mask_tensor is not None:
             latent_mask = F.interpolate(mask_tensor, size=latents.shape[-2:], mode="bilinear", align_corners=False)
 
-        for t in timesteps:
+        for step_idx, t in enumerate(timesteps):
             model_output = unet(latents, t, encoder_hidden_states=encoder_hidden_states).sample
             latents = scheduler.step(model_output, t, latents).prev_sample
             if latent_mask is not None:
-                latents = latents * latent_mask + init_latents * (1 - latent_mask)
+                # preserve non-defect region using the inverted trajectory as reference
+                ref_latent = latents_fwd[start_idx + step_idx]
+                latents = latents * latent_mask + ref_latent * (1 - latent_mask)
 
         images = vae.decode(latents / 0.18215).sample
 
