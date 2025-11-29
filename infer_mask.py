@@ -198,6 +198,21 @@ def infer(
     start_idx = steps_total - steps_to_denoise
     latents = latents_fwd[start_idx]
     timesteps = timesteps_desc[start_idx:]
+    # if mask provided, replace masked region with pure noise to inpaint
+    latent_mask = None
+    if mask_image:
+        mask_img = Image.open(mask_image).convert("L")
+        mask_tensor = transforms.ToTensor()(mask_img)
+        if mask_tensor.ndim == 3:
+            mask_tensor = mask_tensor.unsqueeze(0)
+        if mask_dilate > 0:
+            kernel = torch.ones((1, 1, mask_dilate, mask_dilate), device=mask_tensor.device)
+            padding = mask_dilate // 2
+            mask_tensor = torch.clamp(torch.nn.functional.conv2d(mask_tensor, kernel, padding=padding), 0, 1)
+        mask_tensor = F.interpolate(mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False).to(device)
+        latent_mask = F.interpolate(mask_tensor, size=latents.shape[-2:], mode="bilinear", align_corners=False)
+        noise_init = torch.randn_like(latents)
+        latents = noise_init * latent_mask + latents * (1 - latent_mask)
 
     with torch.no_grad():
         # latent mask for preserving non-defect region (if mask provided)
@@ -209,7 +224,6 @@ def infer(
             model_output = unet(latents, t, encoder_hidden_states=encoder_hidden_states).sample
             latents = scheduler.step(model_output, t, latents).prev_sample
             if latent_mask is not None:
-                # preserve non-defect region using the inverted trajectory as reference
                 ref_latent = latents_fwd[start_idx + step_idx]
                 latents = latents * latent_mask + ref_latent * (1 - latent_mask)
 
