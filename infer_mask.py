@@ -95,7 +95,7 @@ def infer(
     seed: int = 42,
     scale_img: float = 1.0,
     scale_text: float = 0.0,
-    strength: float = 0.0,
+    strength: float = 0.5,
     mask_dilate: int = 0,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -141,16 +141,11 @@ def infer(
         mask_tensor = transforms.ToTensor()(mask_img)
         if mask_tensor.ndim == 3:
             mask_tensor = mask_tensor.unsqueeze(0)  # (1,1,H,W)
-        # optional dilate for blending
         if mask_dilate > 0:
             kernel = torch.ones((1, 1, mask_dilate, mask_dilate), device=mask_tensor.device)
             padding = mask_dilate // 2
-            mask_tensor = torch.clamp(
-                torch.nn.functional.conv2d(mask_tensor, kernel, padding=padding), 0, 1
-            )
-        mask_tensor = F.interpolate(
-            mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False
-        ).to(device)
+            mask_tensor = torch.clamp(torch.nn.functional.conv2d(mask_tensor, kernel, padding=padding), 0, 1)
+        mask_tensor = F.interpolate(mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False).to(device)
 
     with torch.no_grad():
         text_inputs = tokenizer(
@@ -177,34 +172,33 @@ def infer(
     )
     scheduler.set_timesteps(num_steps, device=device)
 
-    # DDIM inversion to get x_T from input image
-    with torch.no_grad():
-        latents_inv = init_latents.clone()
-        inversion_timesteps = scheduler.timesteps.flip(0)  # from t_{N-1} -> t_0
-        for t in inversion_timesteps:
-            # predict noise
-            noise_pred = unet(latents_inv, t, encoder_hidden_states=encoder_hidden_states).sample
-            # inverse step (going to next noisier latent)
-            latents_inv = scheduler.add_noise(latents_inv, noise_pred, t)
-
-    # set start idx based on strength on the inverted trajectory
-    num_inference_steps = len(scheduler.timesteps)
-    t_start = min(num_inference_steps, max(0, int(num_inference_steps * strength)))
-    start_idx = num_inference_steps - t_start
-    start_idx = max(0, min(start_idx, num_inference_steps - 1))
-    latents = latents_inv
-    timesteps = scheduler.timesteps[start_idx:]
+    # img2img-style: add noise proportional to strength
+    latents = init_latents
+    if strength > 0:
+        t_start = int(strength * len(scheduler.timesteps))
+        t_start = min(len(scheduler.timesteps) - 1, max(0, t_start))
+        noise = torch.randn_like(latents)
+        latents = scheduler.add_noise(latents, noise, scheduler.timesteps[t_start])
+        timesteps = scheduler.timesteps[: t_start + 1]
+    else:
+        timesteps = scheduler.timesteps[:1]  # almost no change
 
     with torch.no_grad():
+        # latent mask for preserving non-defect region (if mask provided)
+        latent_mask = None
+        if mask_tensor is not None:
+            latent_mask = F.interpolate(mask_tensor, size=latents.shape[-2:], mode="bilinear", align_corners=False)
+
         for t in timesteps:
             model_output = unet(latents, t, encoder_hidden_states=encoder_hidden_states).sample
             latents = scheduler.step(model_output, t, latents).prev_sample
+            if latent_mask is not None:
+                latents = latents * latent_mask + init_latents * (1 - latent_mask)
 
         images = vae.decode(latents / 0.18215).sample
 
     # optional mask: blend input and output to visualize repaired region
     if mask_tensor is not None:
-        # keep non-defect area as original image
         images = images * mask_tensor + pixel_values * (1 - mask_tensor)
 
     save_image(images, output_path)
