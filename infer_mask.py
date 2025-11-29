@@ -95,7 +95,6 @@ def infer(
     seed: int = 42,
     scale_img: float = 1.0,
     scale_text: float = 0.0,
-    strength: float = 0.5,
     mask_dilate: int = 0,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,60 +171,17 @@ def infer(
     )
     scheduler.set_timesteps(num_steps, device=device)
 
-    # DDIM inversion: forward from t=0 to t_max using deterministic DDIM formula
-    timesteps_desc = scheduler.timesteps  # high -> low
-    timesteps_asc = timesteps_desc.flip(0)  # low -> high
-    alphas = scheduler.alphas_cumprod.to(device)
-
-    latents_fwd = [init_latents]
-    with torch.no_grad():
-        for i in range(len(timesteps_asc) - 1):
-            t = timesteps_asc[i]
-            t_next = timesteps_asc[i + 1]
-            alpha_t = alphas[t]
-            alpha_next = alphas[t_next]
-            eps = unet(latents_fwd[-1], t, encoder_hidden_states=encoder_hidden_states).sample
-            lat_t = latents_fwd[-1]
-            lat_next = (
-                torch.sqrt(alpha_next / alpha_t) * (lat_t - torch.sqrt(1 - alpha_t) * eps)
-                + torch.sqrt(1 - alpha_next) * eps
-            )
-            latents_fwd.append(lat_next)
-
-    # choose start point based on strength
-    steps_total = len(timesteps_desc)
-    steps_to_denoise = max(1, int(steps_total * strength))
-    start_idx = steps_total - steps_to_denoise
-    latents = latents_fwd[start_idx]
-    timesteps = timesteps_desc[start_idx:]
-    # if mask provided, replace masked region with pure noise to inpaint
-    latent_mask = None
-    if mask_image:
-        mask_img = Image.open(mask_image).convert("L")
-        mask_tensor = transforms.ToTensor()(mask_img)
-        if mask_tensor.ndim == 3:
-            mask_tensor = mask_tensor.unsqueeze(0)
-        if mask_dilate > 0:
-            kernel = torch.ones((1, 1, mask_dilate, mask_dilate), device=mask_tensor.device)
-            padding = mask_dilate // 2
-            mask_tensor = torch.clamp(torch.nn.functional.conv2d(mask_tensor, kernel, padding=padding), 0, 1)
-        mask_tensor = F.interpolate(mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False).to(device)
-        latent_mask = F.interpolate(mask_tensor, size=latents.shape[-2:], mode="bilinear", align_corners=False)
-        noise_init = torch.randn_like(latents)
-        latents = noise_init * latent_mask + latents * (1 - latent_mask)
+    # start from pure noise
+    latents = torch.randn(
+        (1, unet.config.in_channels, pixel_values.shape[-2] // 8, pixel_values.shape[-1] // 8),
+        device=device,
+    )
+    timesteps = scheduler.timesteps
 
     with torch.no_grad():
-        # latent mask for preserving non-defect region (if mask provided)
-        latent_mask = None
-        if mask_tensor is not None:
-            latent_mask = F.interpolate(mask_tensor, size=latents.shape[-2:], mode="bilinear", align_corners=False)
-
-        for step_idx, t in enumerate(timesteps):
+        for t in timesteps:
             model_output = unet(latents, t, encoder_hidden_states=encoder_hidden_states).sample
             latents = scheduler.step(model_output, t, latents).prev_sample
-            if latent_mask is not None:
-                ref_latent = latents_fwd[start_idx + step_idx]
-                latents = latents * latent_mask + ref_latent * (1 - latent_mask)
 
         images = vae.decode(latents / 0.18215).sample
 
@@ -250,7 +206,6 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale_img", type=float, default=1.0)
     parser.add_argument("--scale_text", type=float, default=0.0)
-    parser.add_argument("--strength", type=float, default=0.0, help="How deep to follow inverted trajectory (0=noise-free, 1=full)")
     parser.add_argument("--mask_dilate", type=int, default=0, help="Optional dilation for provided mask in blending")
     return parser.parse_args()
 
@@ -270,6 +225,5 @@ if __name__ == "__main__":
         seed=args.seed,
         scale_img=args.scale_img,
         scale_text=args.scale_text,
-        strength=args.strength,
         mask_dilate=args.mask_dilate,
     )
