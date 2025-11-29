@@ -27,3 +27,12 @@ checkpoints/
 # 其他可能很大的中间文件
 *.npz
 *.npy
+
+# Ignore experimental attention mask script
+attention_mask.py
+
+# Ignore old photo validation script
+build_val_oldphoto.py
+
+# Ignore defect dataset generated locally
+ffhq256_defect/
