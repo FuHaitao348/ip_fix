@@ -82,24 +82,30 @@ class IPAttnProcessor_mask2_0(nn.Module):
         else:
             batch_size, channel, height, width = hidden_states.shape[0], None, None, None
 
-        if encoder_hidden_states is None:
-            raise ValueError("encoder_hidden_states must include [text tokens | ip tokens]")
+        use_ip = encoder_hidden_states is not None
 
-        if encoder_hidden_states.shape[1] < self.num_tokens:
-            raise ValueError(
-                f"encoder_hidden_states length {encoder_hidden_states.shape[1]} < num_tokens={self.num_tokens}"
-            )
+        if not use_ip:
+            encoder_hidden_states = hidden_states
 
         batch_size_enc, sequence_length, _ = encoder_hidden_states.shape
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length - self.num_tokens, batch_size_enc)
 
-        # split text/cross and ip tokens
-        end_pos = sequence_length - self.num_tokens
-        encoder_hidden_states, ip_hidden_states = (
-            encoder_hidden_states[:, :end_pos, :],
-            encoder_hidden_states[:, end_pos:, :],
-        )
-        ip_tokens = ip_hidden_states
+        if use_ip:
+            if encoder_hidden_states.shape[1] < self.num_tokens:
+                raise ValueError(
+                    f"encoder_hidden_states length {encoder_hidden_states.shape[1]} < num_tokens={self.num_tokens}"
+                )
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length - self.num_tokens, batch_size_enc)
+
+            # split text/cross and ip tokens
+            end_pos = sequence_length - self.num_tokens
+            encoder_hidden_states, ip_hidden_states = (
+                encoder_hidden_states[:, :end_pos, :],
+                encoder_hidden_states[:, end_pos:, :],
+            )
+            ip_tokens = ip_hidden_states
+        else:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size_enc)
+            ip_hidden_states = None
 
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
@@ -127,21 +133,24 @@ class IPAttnProcessor_mask2_0(nn.Module):
         hidden_states = hidden_states.to(query.dtype)
 
         # ip branch
-        ip_key = self.to_k_ip(ip_hidden_states)
-        ip_value = self.to_v_ip(ip_hidden_states)
+        if use_ip and ip_hidden_states is not None:
+            ip_key = self.to_k_ip(ip_hidden_states)
+            ip_value = self.to_v_ip(ip_hidden_states)
 
-        ip_key = ip_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-        ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            ip_key = ip_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-        ip_hidden_states = F.scaled_dot_product_attention(
-            query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
-        )
+            ip_hidden_states = F.scaled_dot_product_attention(
+                query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
+            )
 
-        ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        ip_hidden_states = ip_hidden_states.to(query.dtype)
+            ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+            ip_hidden_states = ip_hidden_states.to(query.dtype)
+        else:
+            ip_hidden_states = torch.zeros_like(hidden_states)
 
         # mask branch
-        if self.use_mask:
+        if use_ip and self.use_mask:
             ip_key_mask = self.to_k_ip_mask(ip_tokens)
             ip_value_mask = self.to_v_ip_mask(ip_tokens)
 
