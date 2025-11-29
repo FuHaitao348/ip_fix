@@ -8,8 +8,8 @@ class IPAttnProcessor_mask2_0(nn.Module):
     r"""
     IP-Adapter attention processor with optional mask gating.
 
-    Stage1 (reconstruction): train IP projections (to_k_ip/to_v_ip), mask off by default.
-    Stage2 (repair): freeze reconstruction weights, enable and train mask branch only.
+    Stage1: train IP projections (to_k_ip/to_v_ip), mask off by default.
+    Stage2: freeze IP projections, enable mask branch only.
     """
 
     def __init__(
@@ -34,13 +34,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
         self.use_mask = use_mask
         self.mask_clamp = mask_clamp
 
-        # LoRA hooks are left as placeholders in case you want to add them later.
-        # self.to_q_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        # self.to_k_lora = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, rank, network_alpha)
-        # self.to_v_lora = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, rank, network_alpha)
-        # self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-
-        # Mask branch (for Stage2)
+        # mask branch (Stage2)
         self.to_k_ip_mask = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         self.to_v_ip_mask = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         self.to_out_ip_mask = nn.Linear(hidden_size, 1, bias=False)
@@ -51,7 +45,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
         self.scale_img = scale_img
         self.scale_text = scale_text
 
-        # IP branch (train in Stage1, freeze in Stage2)
+        # IP branch (Stage1 trainable, Stage2 freeze)
         self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         if not train_ip:
@@ -88,30 +82,24 @@ class IPAttnProcessor_mask2_0(nn.Module):
         else:
             batch_size, channel, height, width = hidden_states.shape[0], None, None, None
 
-        use_ip = encoder_hidden_states is not None
+        if encoder_hidden_states is None:
+            raise ValueError("encoder_hidden_states must include [text tokens | ip tokens]")
 
-        if not use_ip:
-            encoder_hidden_states = hidden_states
+        if encoder_hidden_states.shape[1] < self.num_tokens:
+            raise ValueError(
+                f"encoder_hidden_states length {encoder_hidden_states.shape[1]} < num_tokens={self.num_tokens}"
+            )
 
         batch_size_enc, sequence_length, _ = encoder_hidden_states.shape
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length - self.num_tokens, batch_size_enc)
 
-        if use_ip:
-            if sequence_length < self.num_tokens:
-                raise ValueError(
-                    f"encoder_hidden_states length {encoder_hidden_states.shape[1]} < num_tokens={self.num_tokens}"
-                )
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length - self.num_tokens, batch_size_enc)
-
-            # Split text/cross tokens and ip tokens
-            end_pos = sequence_length - self.num_tokens
-            encoder_hidden_states, ip_hidden_states = (
-                encoder_hidden_states[:, :end_pos, :],
-                encoder_hidden_states[:, end_pos:, :],
-            )
-            ip_tokens = ip_hidden_states  # raw ip tokens for mask branch
-        else:
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size_enc)
-            ip_hidden_states = None
+        # split text/cross and ip tokens
+        end_pos = sequence_length - self.num_tokens
+        encoder_hidden_states, ip_hidden_states = (
+            encoder_hidden_states[:, :end_pos, :],
+            encoder_hidden_states[:, end_pos:, :],
+        )
+        ip_tokens = ip_hidden_states
 
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
@@ -121,74 +109,60 @@ class IPAttnProcessor_mask2_0(nn.Module):
         if attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        # text/cross branch
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
 
-        def _shape(x: torch.Tensor) -> torch.Tensor:
-            return x.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-        # custom scaling if attn.scale is set
-        scale = getattr(attn, "scale", None)
-        query_for_attn = query * scale if scale is not None else query
-
-        query_heads = _shape(query_for_attn)
-        key_heads = _shape(key)
-        value_heads = _shape(value)
+        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         hidden_states = F.scaled_dot_product_attention(
-            query_heads, key_heads, value_heads, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
+
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 
-        # ip branch (image guidance / reconstruction)
-        if use_ip and ip_hidden_states is not None:
-            ip_key = self.to_k_ip(ip_hidden_states)
-            ip_value = self.to_v_ip(ip_hidden_states)
+        # ip branch
+        ip_key = self.to_k_ip(ip_hidden_states)
+        ip_value = self.to_v_ip(ip_hidden_states)
 
-            ip_key = _shape(ip_key)
-            ip_value = _shape(ip_value)
+        ip_key = ip_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-            ip_hidden_states = F.scaled_dot_product_attention(
-                query_heads, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
-            )
-            ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            ip_hidden_states = ip_hidden_states.to(query.dtype)
-        else:
-            ip_hidden_states = torch.zeros_like(hidden_states)
+        ip_hidden_states = F.scaled_dot_product_attention(
+            query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
+        )
 
-        # mask branch (Stage2), skipped in Stage1 by default
-        if use_ip and self.use_mask:
+        ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        ip_hidden_states = ip_hidden_states.to(query.dtype)
+
+        # mask branch
+        if self.use_mask:
             ip_key_mask = self.to_k_ip_mask(ip_tokens)
             ip_value_mask = self.to_v_ip_mask(ip_tokens)
 
-            ip_key_mask = _shape(ip_key_mask)
-            ip_value_mask = _shape(ip_value_mask)
+            ip_key_mask = ip_key_mask.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            ip_value_mask = ip_value_mask.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
             ip_hidden_states_mask = F.scaled_dot_product_attention(
-                query_heads, ip_key_mask, ip_value_mask, attn_mask=None, dropout_p=0.0, is_causal=False
+                query, ip_key_mask, ip_value_mask, attn_mask=None, dropout_p=0.0, is_causal=False
             )
+
             ip_hidden_states_mask = ip_hidden_states_mask.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+
             ip_hidden_states_mask = self.to_out_ip_mask(ip_hidden_states_mask)
             ip_hidden_states_mask = self.sigmoid(ip_hidden_states_mask)
-
-            if self.mask_clamp is not None:
-                lo, hi = self.mask_clamp
-                ip_hidden_states_mask = ip_hidden_states_mask.clamp(lo, hi)
-
-            ip_hidden_states_mask_out = ip_hidden_states_mask.repeat(1, 1, ip_hidden_states.shape[-1]).to(query.dtype)
+            ip_hidden_states_mask_out = ip_hidden_states_mask.repeat(1, 1, ip_hidden_states.shape[-1])
         else:
-            ip_hidden_states_mask_out = 1.0
+            ip_hidden_states_mask_out = 1
 
-        # combine text and ip branches
         hidden_states = self.scale_text * hidden_states + (self.scale_img * ip_hidden_states) * ip_hidden_states_mask_out
 
-        # linear + dropout
-        hidden_states = attn.to_out[0](hidden_states)  # + self.lora_scale * self.to_out_lora(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:
