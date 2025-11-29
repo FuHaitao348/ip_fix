@@ -4,6 +4,20 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 
 
+class LoRALinearLayer(nn.Module):
+    def __init__(self, in_features: int, out_features: int, rank: int, network_alpha: Optional[int] = None):
+        super().__init__()
+        self.rank = rank
+        self.in_features = in_features
+        self.out_features = out_features
+        self.scale = network_alpha / rank if network_alpha is not None else 1.0 / rank
+        self.lora_down = nn.Linear(in_features, rank, bias=False)
+        self.lora_up = nn.Linear(rank, out_features, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.lora_up(self.lora_down(x)) * self.scale
+
+
 class IPAttnProcessor_mask2_0(nn.Module):
     r"""
     IP-Adapter attention processor with optional mask gating.
@@ -50,6 +64,12 @@ class IPAttnProcessor_mask2_0(nn.Module):
         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         if not train_ip:
             self.freeze_ip()
+
+        # LoRA hooks
+        self.to_q_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_k_lora = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, rank, network_alpha)
+        self.to_v_lora = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, rank, network_alpha)
+        self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
 
     def freeze_ip(self) -> None:
         for module in (self.to_k_ip, self.to_v_ip):
@@ -110,13 +130,13 @@ class IPAttnProcessor_mask2_0(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        query = attn.to_q(hidden_states)
+        query = attn.to_q(hidden_states) + self.lora_scale * self.to_q_lora(hidden_states)
 
         if attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states) + self.lora_scale * self.to_k_lora(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states) + self.lora_scale * self.to_v_lora(encoder_hidden_states)
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -171,7 +191,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
 
         hidden_states = self.scale_text * hidden_states + (self.scale_img * ip_hidden_states) * ip_hidden_states_mask_out
 
-        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) + self.lora_scale * self.to_out_lora(hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:
