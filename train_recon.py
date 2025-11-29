@@ -16,6 +16,11 @@ from transformers import CLIPTokenizer, CLIPTextModel, CLIPVisionModelWithProjec
 
 from attention import IPAttnProcessor_mask2_0
 
+try:
+    from lpips import LPIPS
+except ImportError:
+    LPIPS = None
+
 
 # ------------- 数据集 -------------
 class ImageFolder256(Dataset):
@@ -47,7 +52,7 @@ class TrainConfig:
     image_encoder_path: str = "models/clip-vit-large-patch14"
     train_data_dir: str = "ffhq256"
     output_dir: str = "outputs/recon_stage1"
-    batch_size: int = 16
+    batch_size: int = 32
     num_workers: int = 4
     lr: float = 1e-4
     weight_decay: float = 0.01
@@ -59,6 +64,8 @@ class TrainConfig:
     scale_text: float = 0.0
     seed: int = 42
     log_interval: int = 100
+    lpips_weight: float = 0.0
+    l1_weight: float = 0.0
 
 
 # ------------- 工具 -------------
@@ -219,6 +226,25 @@ def train(cfg: TrainConfig):
             loss_noise = F.mse_loss(model_pred, noise)
             loss = loss_noise
 
+            # optional perceptual/pixel losses for better detail/generalization
+            if (cfg.lpips_weight > 0 or cfg.l1_weight > 0) and scheduler.alphas_cumprod is not None:
+                alphas = scheduler.alphas_cumprod.to(device)[timesteps].view(-1, 1, 1, 1)
+                sqrt_alpha = torch.sqrt(alphas)
+                sqrt_one_minus = torch.sqrt(1 - alphas)
+                pred_x0 = (noisy_latents - sqrt_one_minus * model_pred) / sqrt_alpha
+                with torch.no_grad():
+                    recon = vae.decode(pred_x0 / 0.18215).sample
+                if cfg.lpips_weight > 0:
+                    if LPIPS is None:
+                        raise ImportError("lpips is not installed but lpips_weight > 0")
+                    if "lpips_fn" not in locals():
+                        lpips_fn = LPIPS(net="vgg").to(device)
+                    loss_lpips = lpips_fn(recon, pixel_values).mean()
+                    loss = loss + cfg.lpips_weight * loss_lpips
+                if cfg.l1_weight > 0:
+                    loss_l1 = F.l1_loss(recon, pixel_values)
+                    loss = loss + cfg.l1_weight * loss_l1
+
             loss.backward()
 
             if (global_step + 1) % cfg.gradient_accumulation_steps == 0:
@@ -265,6 +291,8 @@ def parse_args():
     parser.add_argument("--scale_text", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=100, help="Steps between writing loss to CSV")
+    parser.add_argument("--lpips_weight", type=float, default=0.0, help="Weight for LPIPS loss (0 to disable)")
+    parser.add_argument("--l1_weight", type=float, default=0.0, help="Weight for L1 loss (0 to disable)")
     return parser.parse_args()
 
 
@@ -287,5 +315,7 @@ if __name__ == "__main__":
         scale_text=args.scale_text,
         seed=args.seed,
         log_interval=args.log_interval,
+        lpips_weight=args.lpips_weight,
+        l1_weight=args.l1_weight,
     )
     train(cfg)
