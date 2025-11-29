@@ -96,6 +96,7 @@ def infer(
     scale_img: float = 1.0,
     scale_text: float = 0.0,
     strength: float = 0.0,
+    mask_dilate: int = 0,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seed(seed)
@@ -110,7 +111,9 @@ def infer(
 
     # replace attention with mask enabled
     cross_dim = unet.config.cross_attention_dim
-    replace_unet_attention(unet, cross_attention_dim=cross_dim, num_tokens=num_tokens, scale_img=scale_img, scale_text=scale_text, use_mask=True)
+    replace_unet_attention(
+        unet, cross_attention_dim=cross_dim, num_tokens=num_tokens, scale_img=scale_img, scale_text=scale_text, use_mask=True
+    )
     unet.to(device)
 
     # projection
@@ -138,6 +141,13 @@ def infer(
         mask_tensor = transforms.ToTensor()(mask_img)
         if mask_tensor.ndim == 3:
             mask_tensor = mask_tensor.unsqueeze(0)  # (1,1,H,W)
+        # optional dilate for blending
+        if mask_dilate > 0:
+            kernel = torch.ones((1, 1, mask_dilate, mask_dilate), device=mask_tensor.device)
+            padding = mask_dilate // 2
+            mask_tensor = torch.clamp(
+                torch.nn.functional.conv2d(mask_tensor, kernel, padding=padding), 0, 1
+            )
         mask_tensor = F.interpolate(
             mask_tensor, size=pixel_values.shape[-2:], mode="bilinear", align_corners=False
         ).to(device)
@@ -156,6 +166,7 @@ def infer(
 
         init_latents = vae.encode(pixel_values).latent_dist.sample() * 0.18215
 
+    # DDIM scheduler
     scheduler = DDIMScheduler(
         num_train_timesteps=1000,
         beta_start=0.00085,
@@ -166,14 +177,22 @@ def infer(
     )
     scheduler.set_timesteps(num_steps, device=device)
 
-    # start from image latent with optional small noise
+    # DDIM inversion to get x_T from input image
+    with torch.no_grad():
+        latents_inv = init_latents.clone()
+        inversion_timesteps = scheduler.timesteps.flip(0)  # from t_{N-1} -> t_0
+        for t in inversion_timesteps:
+            # predict noise
+            noise_pred = unet(latents_inv, t, encoder_hidden_states=encoder_hidden_states).sample
+            # inverse step (going to next noisier latent)
+            latents_inv = scheduler.add_noise(latents_inv, noise_pred, t)
+
+    # set start idx based on strength on the inverted trajectory
     num_inference_steps = len(scheduler.timesteps)
     t_start = min(num_inference_steps, max(0, int(num_inference_steps * strength)))
     start_idx = num_inference_steps - t_start
     start_idx = max(0, min(start_idx, num_inference_steps - 1))
-    init_timestep = scheduler.timesteps[start_idx]
-    noise = torch.randn_like(init_latents)
-    latents = scheduler.add_noise(init_latents, noise, init_timestep)
+    latents = latents_inv
     timesteps = scheduler.timesteps[start_idx:]
 
     with torch.no_grad():
@@ -185,6 +204,7 @@ def infer(
 
     # optional mask: blend input and output to visualize repaired region
     if mask_tensor is not None:
+        # keep non-defect area as original image
         images = images * mask_tensor + pixel_values * (1 - mask_tensor)
 
     save_image(images, output_path)
@@ -204,7 +224,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale_img", type=float, default=1.0)
     parser.add_argument("--scale_text", type=float, default=0.0)
-    parser.add_argument("--strength", type=float, default=0.0, help="Noise strength when starting from image latent")
+    parser.add_argument("--strength", type=float, default=0.0, help="How deep to follow inverted trajectory (0=noise-free, 1=full)")
+    parser.add_argument("--mask_dilate", type=int, default=0, help="Optional dilation for provided mask in blending")
     return parser.parse_args()
 
 
@@ -224,4 +245,5 @@ if __name__ == "__main__":
         scale_img=args.scale_img,
         scale_text=args.scale_text,
         strength=args.strength,
+        mask_dilate=args.mask_dilate,
     )
