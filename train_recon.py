@@ -52,6 +52,7 @@ class TrainConfig:
     image_encoder_path: str = "models/clip-vit-large-patch14"
     train_data_dir: str = "ffhq256"
     output_dir: str = "outputs/recon_stage1"
+    resume_ckpt: Optional[str] = None
     batch_size: int = 32
     num_workers: int = 4
     lr: float = 1e-4
@@ -155,6 +156,17 @@ def train(cfg: TrainConfig):
         clip_sample=False,
         set_alpha_to_one=False,
     )
+
+    # optional resume from previous stage1 ckpt
+    if cfg.resume_ckpt:
+        ckpt = torch.load(cfg.resume_ckpt, map_location="cpu")
+        if isinstance(ckpt, dict) and "unet" in ckpt and "ip_proj" in ckpt:
+            unet.load_state_dict(ckpt["unet"], strict=False)
+            ip_proj.load_state_dict(ckpt["ip_proj"], strict=False)
+            print(f"Resumed from {cfg.resume_ckpt}")
+        else:
+            unet.load_state_dict(ckpt, strict=False)
+            print(f"Resumed unet from {cfg.resume_ckpt} (ip_proj not found)")
 
     # 冻结不训练的模块
     vae.requires_grad_(False)
@@ -293,6 +305,7 @@ def parse_args():
     parser.add_argument("--log_interval", type=int, default=100, help="Steps between writing loss to CSV")
     parser.add_argument("--lpips_weight", type=float, default=0.0, help="Weight for LPIPS loss (0 to disable)")
     parser.add_argument("--l1_weight", type=float, default=0.0, help="Weight for L1 loss (0 to disable)")
+    parser.add_argument("--resume_ckpt", type=str, default=None, help="Resume from previous stage1 ckpt (unet/ip_proj)")
     return parser.parse_args()
 
 
@@ -317,5 +330,6 @@ if __name__ == "__main__":
         log_interval=args.log_interval,
         lpips_weight=args.lpips_weight,
         l1_weight=args.l1_weight,
+        resume_ckpt=args.resume_ckpt,
     )
     train(cfg)
