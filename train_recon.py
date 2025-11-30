@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
+from torchvision import transforms, models
 from torchvision.datasets import ImageFolder
 from tqdm.auto import tqdm
 
@@ -67,6 +68,8 @@ class TrainConfig:
     log_interval: int = 100
     lpips_weight: float = 0.0
     l1_weight: float = 0.0
+    id_weight: float = 0.0
+    id_encoder: str = "resnet50"
 
 
 # ------------- 工具 -------------
@@ -185,6 +188,17 @@ def train(cfg: TrainConfig):
                 p.requires_grad_(False)
     train_params += list(ip_proj.parameters())
 
+    # id encoder (optional)
+    id_encoder = None
+    id_mean = id_std = None
+    if cfg.id_weight > 0:
+        id_encoder = getattr(models, cfg.id_encoder)(weights="IMAGENET1K_V2").to(device)
+        if hasattr(id_encoder, "fc"):
+            id_encoder.fc = nn.Identity()
+        id_encoder.eval()
+        id_mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+        id_std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+
     optimizer = torch.optim.AdamW(train_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 
     dataset = ImageFolder256(cfg.train_data_dir)
@@ -238,8 +252,8 @@ def train(cfg: TrainConfig):
             loss_noise = F.mse_loss(model_pred, noise)
             loss = loss_noise
 
-            # optional perceptual/pixel losses for better detail/generalization
-            if (cfg.lpips_weight > 0 or cfg.l1_weight > 0) and scheduler.alphas_cumprod is not None:
+            # optional perceptual/pixel/id losses for better detail/generalization
+            if (cfg.lpips_weight > 0 or cfg.l1_weight > 0 or cfg.id_weight > 0) and scheduler.alphas_cumprod is not None:
                 alphas = scheduler.alphas_cumprod.to(device)[timesteps].view(-1, 1, 1, 1)
                 sqrt_alpha = torch.sqrt(alphas)
                 sqrt_one_minus = torch.sqrt(1 - alphas)
@@ -256,6 +270,19 @@ def train(cfg: TrainConfig):
                 if cfg.l1_weight > 0:
                     loss_l1 = F.l1_loss(recon, pixel_values)
                     loss = loss + cfg.l1_weight * loss_l1
+                if cfg.id_weight > 0 and id_encoder is not None:
+                    def _id_feats(x: torch.Tensor) -> torch.Tensor:
+                        x = (x * 0.5 + 0.5)
+                        x = F.interpolate(x, size=(224, 224), mode="bilinear", align_corners=False)
+                        x = (x - id_mean) / id_std
+                        feats = id_encoder(x)
+                        if feats.ndim > 2:
+                            feats = torch.flatten(feats, start_dim=1)
+                        return F.normalize(feats, dim=1)
+                    feat_recon = _id_feats(recon)
+                    feat_target = _id_feats(pixel_values)
+                    loss_id = 1 - F.cosine_similarity(feat_recon, feat_target).mean()
+                    loss = loss + cfg.id_weight * loss_id
 
             loss.backward()
 
@@ -306,6 +333,8 @@ def parse_args():
     parser.add_argument("--lpips_weight", type=float, default=0.0, help="Weight for LPIPS loss (0 to disable)")
     parser.add_argument("--l1_weight", type=float, default=0.0, help="Weight for L1 loss (0 to disable)")
     parser.add_argument("--resume_ckpt", type=str, default=None, help="Resume from previous stage1 ckpt (unet/ip_proj)")
+    parser.add_argument("--id_weight", type=float, default=0.0, help="Weight for ID cosine loss (0 to disable)")
+    parser.add_argument("--id_encoder", type=str, default="resnet50", help="torchvision model name for ID features")
     return parser.parse_args()
 
 
@@ -331,5 +360,7 @@ if __name__ == "__main__":
         lpips_weight=args.lpips_weight,
         l1_weight=args.l1_weight,
         resume_ckpt=args.resume_ckpt,
+        id_weight=args.id_weight,
+        id_encoder=args.id_encoder,
     )
     train(cfg)
