@@ -85,7 +85,7 @@ def infer(
     ckpt_path: str,
     input_image: str,
     output_path: str,
-    num_tokens: int = 4,
+    num_tokens: int = 16,
     num_steps: int = 50,
     seed: int = 42,
     scale_img: float = 1.0,
@@ -179,7 +179,7 @@ def parse_args():
     parser.add_argument("--ckpt_path", type=str, required=True, help="Path to unet_ip_stage1_epoch*.bin")
     parser.add_argument("--input_image", type=str, required=True)
     parser.add_argument("--output_path", type=str, default="outputs/recon_eval/output.png")
-    parser.add_argument("--num_tokens", type=int, default=4)
+    parser.add_argument("--num_tokens", type=int, default=16)
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale_img", type=float, default=1.0, help="Weight for IP branch")

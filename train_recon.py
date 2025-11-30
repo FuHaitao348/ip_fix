@@ -61,14 +61,14 @@ class TrainConfig:
     num_epochs: int = 1
     gradient_accumulation_steps: int = 1
     max_train_steps: Optional[int] = None
-    num_tokens: int = 4
+    num_tokens: int = 16
     scale_img: float = 1.0
     scale_text: float = 0.0
     seed: int = 42
     log_interval: int = 100
-    lpips_weight: float = 0.0
-    l1_weight: float = 0.0
-    id_weight: float = 0.0
+    lpips_weight: float = 0.1
+    l1_weight: float = 0.05
+    id_weight: float = 0.5
     id_encoder: str = "resnet50"
 
 

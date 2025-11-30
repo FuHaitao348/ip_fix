@@ -90,7 +90,7 @@ def infer(
     input_image: str,
     mask_image: Optional[str],
     output_path: str,
-    num_tokens: int = 4,
+    num_tokens: int = 16,
     num_steps: int = 50,
     seed: int = 42,
     scale_img: float = 1.0,
@@ -201,7 +201,7 @@ def parse_args():
     parser.add_argument("--input_image", type=str, required=True)
     parser.add_argument("--mask_image", type=str, default=None, help="Optional mask for visualization blending")
     parser.add_argument("--output_path", type=str, default="outputs/mask_eval/out.png")
-    parser.add_argument("--num_tokens", type=int, default=4)
+    parser.add_argument("--num_tokens", type=int, default=16)
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale_img", type=float, default=1.0)

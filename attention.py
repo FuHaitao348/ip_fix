@@ -30,7 +30,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
         self,
         hidden_size: int,
         cross_attention_dim: Optional[int] = None,
-        rank: int = 4,
+        rank: int = 8,
         network_alpha: Optional[int] = None,
         lora_scale: float = 1.0,
         scale_img: float = 1.0,
