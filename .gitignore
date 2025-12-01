@@ -1,0 +1,14 @@
+# Ignore all files
+*
+
+# Allow these folders/files
+!ip_adapter/
+!tutorial_train_plus.py
+!pyproject.toml
+!README.md
+
+# But inside ip_adapter, ignore nothing
+!ip_adapter/**
+
+# Allow .gitignore itself
+!.gitignore
