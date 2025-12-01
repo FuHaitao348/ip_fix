@@ -2,10 +2,12 @@
 *
 
 # Allow these folders/files
+!.gitignore
 !ip_adapter/
 !tutorial_train_plus.py
 !pyproject.toml
 !README.md
+!validate_recon.py
 
 # But inside ip_adapter, ignore nothing
 !ip_adapter/**
