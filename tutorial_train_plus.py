@@ -171,7 +171,7 @@ def parse_args():
     parser.add_argument(
         "--num_tokens",
         type=int,
-        default=8,
+        default=16,
         help="Number of tokens to query from the CLIP image encoding.",
     )
     parser.add_argument(
