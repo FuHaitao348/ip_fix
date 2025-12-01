@@ -344,7 +344,10 @@ def main():
             if "scale_text" in IPAttnProcessor.__init__.__code__.co_varnames:
                 ip_kwargs.update({"scale_text": 0.0, "scale_img": 1.0})
             attn_procs[name] = IPAttnProcessor(**ip_kwargs)
-            attn_procs[name].load_state_dict(weights)
+            # Merge default init with pretrained text weights; ignore extra mask params.
+            state = attn_procs[name].state_dict()
+            state.update(weights)
+            attn_procs[name].load_state_dict(state, strict=False)
     unet.set_attn_processor(attn_procs)
     adapter_modules = torch.nn.ModuleList(unet.attn_processors.values())
     
