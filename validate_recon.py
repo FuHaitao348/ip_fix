@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+from typing import Dict, Tuple
 
 import torch
 from PIL import Image
@@ -39,20 +40,46 @@ def list_images(path: Path):
     return imgs
 
 
+def _collect_from_state(state: Dict[str, torch.Tensor]) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    image_proj: Dict[str, torch.Tensor] = {}
+    ip_adapter: Dict[str, torch.Tensor] = {}
+
+    def strip_after(marker: str, key: str):
+        idx = key.find(marker)
+        if idx == -1:
+            return None
+        return key[idx + len(marker):]
+
+    for k, v in state.items():
+        # tolerate optional "model." prefix in Accelerate checkpoints
+        k_clean = k[6:] if k.startswith("model.") else k
+
+        sub = strip_after("image_proj_model.", k_clean) or strip_after("image_proj.", k_clean)
+        if sub is not None:
+            image_proj[sub] = v
+            continue
+
+        sub = strip_after("adapter_modules.", k_clean)
+        if sub is not None:
+            ip_adapter[sub] = v
+            continue
+        sub = strip_after("ip_adapter.adapter_modules.", k_clean)
+        if sub is not None:
+            ip_adapter[sub] = v
+            continue
+    return image_proj, ip_adapter
+
+
 def extract_ip_weights(acc_ckpt_path: Path, save_dir: Path) -> Path:
     state = torch.load(acc_ckpt_path, map_location="cpu")
-    image_proj = {
-        k.replace("ip_adapter.image_proj_model.", ""): v
-        for k, v in state.items()
-        if k.startswith("ip_adapter.image_proj_model.")
-    }
-    ip_adapter = {
-        k.replace("ip_adapter.adapter_modules.", ""): v
-        for k, v in state.items()
-        if k.startswith("ip_adapter.adapter_modules.")
-    }
+    image_proj, ip_adapter = _collect_from_state(state)
+
     if len(image_proj) == 0 or len(ip_adapter) == 0:
-        raise ValueError(f"Checkpoint {acc_ckpt_path} does not contain ip_adapter weights")
+        sample_keys = list(state.keys())[:20]
+        raise ValueError(
+            f"Checkpoint {acc_ckpt_path} missing ip_adapter weights. "
+            f"image_proj={len(image_proj)}, adapter={len(ip_adapter)}, sample_keys={sample_keys}"
+        )
 
     base_name = acc_ckpt_path.parent.name if acc_ckpt_path.name == "pytorch_model.bin" else acc_ckpt_path.stem
     out_path = save_dir / f"{base_name}_ip_adapter_eval.pth"
