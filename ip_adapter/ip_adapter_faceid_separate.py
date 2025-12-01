@@ -16,7 +16,7 @@ if is_torch2_available() and (not USE_DAFAULT_ATTN):
         AttnProcessor2_0 as AttnProcessor,
     )
     from .attention_processor import (
-        IPAttnProcessor2_0 as IPAttnProcessor,
+        IPAttnProcessor_mask2_0 as IPAttnProcessor,
     )
 else:
     from .attention_processor import AttnProcessor, IPAttnProcessor

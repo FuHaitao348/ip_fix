@@ -8,7 +8,7 @@ from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import
 from .utils import is_torch2_available
 
 if is_torch2_available():
-    from .attention_processor import IPAttnProcessor2_0 as IPAttnProcessor
+    from .attention_processor import IPAttnProcessor_mask2_0 as IPAttnProcessor
 else:
     from .attention_processor import IPAttnProcessor
 
