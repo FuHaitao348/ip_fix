@@ -13,7 +13,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Validate IP-Adapter reconstruction on a few images.")
     parser.add_argument("--base_model", type=str, required=True, help="Path to SD base model (e.g., models/sd15).")
     parser.add_argument("--image_encoder_path", type=str, required=True, help="Path to CLIP image encoder.")
-    parser.add_argument("--ip_ckpt", type=str, required=True, help="Path to trained ip_adapter checkpoint (.pth or .safetensors).")
+    parser.add_argument(
+        "--ip_ckpt",
+        type=str,
+        required=True,
+        help="Path to trained ip_adapter weights (.pth/.safetensors) or Accelerate checkpoint dir/.bin to be converted.",
+    )
     parser.add_argument("--input", type=str, required=True, help="Image file or directory to reconstruct.")
     parser.add_argument("--output_dir", type=str, default="outputs/recon_eval", help="Where to save reconstructions.")
     parser.add_argument("--num_tokens", type=int, default=16, help="Number of image tokens used during training.")
@@ -34,6 +39,36 @@ def list_images(path: Path):
     return imgs
 
 
+def extract_ip_weights(acc_ckpt_path: Path, save_dir: Path) -> Path:
+    state = torch.load(acc_ckpt_path, map_location="cpu")
+    image_proj = {
+        k.replace("ip_adapter.image_proj_model.", ""): v
+        for k, v in state.items()
+        if k.startswith("ip_adapter.image_proj_model.")
+    }
+    ip_adapter = {
+        k.replace("ip_adapter.adapter_modules.", ""): v
+        for k, v in state.items()
+        if k.startswith("ip_adapter.adapter_modules.")
+    }
+    if len(image_proj) == 0 or len(ip_adapter) == 0:
+        raise ValueError(f"Checkpoint {acc_ckpt_path} does not contain ip_adapter weights")
+
+    base_name = acc_ckpt_path.parent.name if acc_ckpt_path.name == "pytorch_model.bin" else acc_ckpt_path.stem
+    out_path = save_dir / f"{base_name}_ip_adapter_eval.pth"
+    torch.save({"image_proj": image_proj, "ip_adapter": ip_adapter}, out_path)
+    return out_path
+
+
+def resolve_ip_ckpt(ip_ckpt_arg: str, output_dir: Path) -> Path:
+    ckpt_path = Path(ip_ckpt_arg)
+    if ckpt_path.is_dir():
+        ckpt_path = ckpt_path / "pytorch_model.bin"
+    if ckpt_path.suffix == ".bin":
+        return extract_ip_weights(ckpt_path, output_dir)
+    return ckpt_path
+
+
 def main():
     args = parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,6 +83,7 @@ def main():
         raise ValueError(f"No images found at {args.input}")
 
     os.makedirs(args.output_dir, exist_ok=True)
+    ip_ckpt_path = resolve_ip_ckpt(args.ip_ckpt, Path(args.output_dir))
 
     pipe = StableDiffusionPipeline.from_pretrained(
         args.base_model, torch_dtype=dtype, safety_checker=None, feature_extractor=None
@@ -56,7 +92,7 @@ def main():
     ip = IPAdapter(
         pipe,
         image_encoder_path=args.image_encoder_path,
-        ip_ckpt=args.ip_ckpt,
+        ip_ckpt=str(ip_ckpt_path),
         device=device,
         num_tokens=args.num_tokens,
     )
