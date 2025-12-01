@@ -107,12 +107,16 @@ class IPAdapter:
             if cross_attention_dim is None:
                 attn_procs[name] = AttnProcessor()
             else:
-                attn_procs[name] = IPAttnProcessor(
-                    hidden_size=hidden_size,
-                    cross_attention_dim=cross_attention_dim,
-                    scale=1.0,
-                    num_tokens=self.num_tokens,
-                ).to(self.device, dtype=torch.float16)
+                ip_kwargs = {
+                    "hidden_size": hidden_size,
+                    "cross_attention_dim": cross_attention_dim,
+                    "num_tokens": self.num_tokens,
+                }
+                if "scale_img" in IPAttnProcessor.__init__.__code__.co_varnames:
+                    ip_kwargs.update({"scale_img": 1.0, "scale_text": 0.0})
+                else:
+                    ip_kwargs.update({"scale": 1.0})
+                attn_procs[name] = IPAttnProcessor(**ip_kwargs).to(self.device, dtype=torch.float16)
         unet.set_attn_processor(attn_procs)
         if hasattr(self.pipe, "controlnet"):
             if isinstance(self.pipe.controlnet, MultiControlNetModel):
@@ -152,7 +156,10 @@ class IPAdapter:
     def set_scale(self, scale):
         for attn_processor in self.pipe.unet.attn_processors.values():
             if isinstance(attn_processor, IPAttnProcessor):
-                attn_processor.scale = scale
+                if hasattr(attn_processor, "scale_img"):
+                    attn_processor.scale_img = scale
+                else:
+                    attn_processor.scale = scale
 
     def generate(
         self,

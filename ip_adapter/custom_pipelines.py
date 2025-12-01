@@ -17,7 +17,10 @@ class StableDiffusionXLCustomPipeline(StableDiffusionXLPipeline):
     def set_scale(self, scale):
         for attn_processor in self.unet.attn_processors.values():
             if isinstance(attn_processor, IPAttnProcessor):
-                attn_processor.scale = scale
+                if hasattr(attn_processor, "scale_img"):
+                    attn_processor.scale_img = scale
+                else:
+                    attn_processor.scale = scale
 
     @torch.no_grad()
     def __call__(  # noqa: C901
@@ -318,7 +321,7 @@ class StableDiffusionXLCustomPipeline(StableDiffusionXLPipeline):
         # get init conditioning scale
         for attn_processor in self.unet.attn_processors.values():
             if isinstance(attn_processor, IPAttnProcessor):
-                conditioning_scale = attn_processor.scale
+                conditioning_scale = getattr(attn_processor, "scale_img", getattr(attn_processor, "scale", 1.0))
                 break
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:

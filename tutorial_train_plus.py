@@ -28,7 +28,7 @@ else:
 # Dataset
 class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0.05, i_drop_rate=0.05, ti_drop_rate=0.05, image_root_path=""):
+    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0.0, i_drop_rate=0.0, ti_drop_rate=0.0, image_root_path=""):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -336,7 +336,14 @@ def main():
                 "to_k_ip.weight": unet_sd[layer_name + ".to_k.weight"],
                 "to_v_ip.weight": unet_sd[layer_name + ".to_v.weight"],
             }
-            attn_procs[name] = IPAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, num_tokens=args.num_tokens)
+            ip_kwargs = {
+                "hidden_size": hidden_size,
+                "cross_attention_dim": cross_attention_dim,
+                "num_tokens": args.num_tokens,
+            }
+            if "scale_text" in IPAttnProcessor.__init__.__code__.co_varnames:
+                ip_kwargs.update({"scale_text": 0.0, "scale_img": 1.0})
+            attn_procs[name] = IPAttnProcessor(**ip_kwargs)
             attn_procs[name].load_state_dict(weights)
     unet.set_attn_processor(attn_procs)
     adapter_modules = torch.nn.ModuleList(unet.attn_processors.values())
