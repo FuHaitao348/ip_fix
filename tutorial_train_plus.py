@@ -1,4 +1,5 @@
 import os
+import random
 import argparse
 from pathlib import Path
 import json
@@ -18,12 +19,8 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjec
 
 from ip_adapter.resampler import Resampler
 from ip_adapter.utils import is_torch2_available
-from ip_adapter.IPAttnProcessor_mask2_0 import IPAttnProcessor_mask2_0
-
-torch2_available = is_torch2_available()
-if torch2_available:
-    from ip_adapter.attention_processor import AttnProcessor2_0 as AttnProcessor
-    IPAttnProcessor = IPAttnProcessor_mask2_0
+if is_torch2_available():
+    from ip_adapter.attention_processor import IPAttnProcessor2_0 as IPAttnProcessor, AttnProcessor2_0 as AttnProcessor
 else:
     from ip_adapter.attention_processor import IPAttnProcessor, AttnProcessor
 
@@ -53,8 +50,7 @@ class MyDataset(torch.utils.data.Dataset):
         
     def __getitem__(self, idx):
         item = self.data[idx] 
-        # disable text branch for pure image-driven reconstruction
-        text = ""
+        text = item["text"]
         image_file = item["image_file"]
         
         # read image
@@ -62,8 +58,16 @@ class MyDataset(torch.utils.data.Dataset):
         image = self.transform(raw_image.convert("RGB"))
         clip_image = self.clip_image_processor(images=raw_image, return_tensors="pt").pixel_values
         
-        # keep image embeddings always on for reconstruction
+        # drop
         drop_image_embed = 0
+        rand_num = random.random()
+        if rand_num < self.i_drop_rate:
+            drop_image_embed = 1
+        elif rand_num < (self.i_drop_rate + self.t_drop_rate):
+            text = ""
+        elif rand_num < (self.i_drop_rate + self.t_drop_rate + self.ti_drop_rate):
+            text = ""
+            drop_image_embed = 1
         # get text and tokenize
         text_input_ids = self.tokenizer(
             text,
@@ -332,15 +336,8 @@ def main():
                 "to_k_ip.weight": unet_sd[layer_name + ".to_k.weight"],
                 "to_v_ip.weight": unet_sd[layer_name + ".to_v.weight"],
             }
-            ip_kwargs = dict(
-                hidden_size=hidden_size,
-                cross_attention_dim=cross_attention_dim,
-                num_tokens=args.num_tokens,
-            )
-            if torch2_available:
-                ip_kwargs.update({"scale_img": 1.0, "scale_text": 0.0, "use_mask": False})
-            attn_procs[name] = IPAttnProcessor(**ip_kwargs)
-            attn_procs[name].load_state_dict(weights, strict=False)
+            attn_procs[name] = IPAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, num_tokens=args.num_tokens)
+            attn_procs[name].load_state_dict(weights)
     unet.set_attn_processor(attn_procs)
     adapter_modules = torch.nn.ModuleList(unet.attn_processors.values())
     
@@ -395,7 +392,13 @@ def main():
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
                 
-                clip_images = batch["clip_images"]
+                clip_images = []
+                for clip_image, drop_image_embed in zip(batch["clip_images"], batch["drop_image_embeds"]):
+                    if drop_image_embed == 1:
+                        clip_images.append(torch.zeros_like(clip_image))
+                    else:
+                        clip_images.append(clip_image)
+                clip_images = torch.stack(clip_images, dim=0)
                 with torch.no_grad():
                     image_embeds = image_encoder(clip_images.to(accelerator.device, dtype=weight_dtype), output_hidden_states=True).hidden_states[-2]
             

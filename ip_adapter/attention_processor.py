@@ -294,7 +294,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
             Equivalent to `alpha` but it's usage is specific to Kohya (A1111) style LoRAs.
     """
 
-    def __init__(self, hidden_size, cross_attention_dim=None, rank=4, network_alpha=None, lora_scale=1.0, scale_img=1.0, scale_text=1.0, num_tokens=4,use_mask=True):
+    def __init__(self, hidden_size, cross_attention_dim=None, rank=4, network_alpha=None, lora_scale=1.0, scale_img=1.0, scale_text=1.0, num_tokens=4,use_mask=False):
         super().__init__()
         
         self.rank = rank
@@ -440,6 +440,7 @@ class IPAttnProcessor_mask2_0(nn.Module):
         hidden_states = hidden_states / attn.rescale_output_factor
 
         return hidden_states
+
 
 ## for controlnet
 class CNAttnProcessor:
