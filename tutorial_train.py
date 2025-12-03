@@ -28,7 +28,7 @@ else:
 # Dataset
 class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, tokenizer, size=256, t_drop_rate=0.0, i_drop_rate=0.0, ti_drop_rate=0.0, image_root_path=""):
+    def __init__(self, json_file, tokenizer, size=256, t_drop_rate=0.05, i_drop_rate=0.05, ti_drop_rate=0.05, image_root_path=""):
         super().__init__()
 
         self.tokenizer = tokenizer
