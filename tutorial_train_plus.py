@@ -28,7 +28,7 @@ else:
 # Dataset
 class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0.0, i_drop_rate=0.0, ti_drop_rate=0.0, image_root_path=""):
+    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0.05, i_drop_rate=0.05, ti_drop_rate=0.05, image_root_path=""):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -342,7 +342,7 @@ def main():
                 "num_tokens": args.num_tokens,
             }
             if "scale_text" in IPAttnProcessor.__init__.__code__.co_varnames:
-                ip_kwargs.update({"scale_text": 0.0, "scale_img": 1.0})
+                ip_kwargs.update({"scale_text": 0.0, "scale_img": 1.0, "use_mask": True})
             attn_procs[name] = IPAttnProcessor(**ip_kwargs)
             # Merge default init with pretrained text weights; ignore extra mask params.
             state = attn_procs[name].state_dict()
@@ -363,9 +363,14 @@ def main():
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     image_encoder.to(accelerator.device, dtype=weight_dtype)
     
-    # optimizer
-    params_to_opt = itertools.chain(ip_adapter.image_proj_model.parameters(),  ip_adapter.adapter_modules.parameters())
-    optimizer = torch.optim.AdamW(params_to_opt, lr=args.learning_rate, weight_decay=args.weight_decay)
+    # freeze重建分支，只训mask分支
+    ip_adapter.image_proj_model.requires_grad_(False)
+    for name, p in ip_adapter.adapter_modules.named_parameters():
+        if ("to_k_ip_mask" not in name) and ("to_v_ip_mask" not in name) and ("to_out_ip_mask" not in name):
+            p.requires_grad_(False)
+
+    mask_params = [p for p in ip_adapter.adapter_modules.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(mask_params, lr=args.learning_rate, weight_decay=args.weight_decay)
     
     # dataloader
     train_dataset = MyDataset(args.data_json_file, tokenizer=tokenizer, size=args.resolution, image_root_path=args.data_root_path)
