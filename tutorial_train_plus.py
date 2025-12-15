@@ -28,7 +28,7 @@ else:
 # Dataset
 class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0, i_drop_rate=0, ti_drop_rate=0, image_root_path=""):
+    def __init__(self, json_file, tokenizer, size=512, t_drop_rate=0.0, i_drop_rate=0.0, ti_drop_rate=0.0, image_root_path=""):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -363,7 +363,7 @@ def main():
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     image_encoder.to(accelerator.device, dtype=weight_dtype)
     
-    # freeze重建分支，只训mask分支
+    # freeze重建分支，只训练mask分支
     ip_adapter.image_proj_model.requires_grad_(False)
     for name, p in ip_adapter.adapter_modules.named_parameters():
         if ("to_k_ip_mask" not in name) and ("to_v_ip_mask" not in name) and ("to_out_ip_mask" not in name):
@@ -435,18 +435,6 @@ def main():
                 if accelerator.is_main_process:
                     print("Epoch {}, step {}, data_time: {}, time: {}, step_loss: {}".format(
                         epoch, step, load_data_time, time.perf_counter() - begin, avg_loss))
-            
-            global_step += 1
-            
-            if global_step % args.save_steps == 0:
-                save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                accelerator.save_state(save_path)
-            
-            begin = time.perf_counter()
-                
-if __name__ == "__main__":
-    main()    
-            epoch, step, load_data_time, time.perf_counter() - begin, avg_loss))
             
             global_step += 1
             
