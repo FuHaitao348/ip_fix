@@ -50,13 +50,15 @@ class MyDataset(torch.utils.data.Dataset):
         
     def __getitem__(self, idx):
         item = self.data[idx] 
-        text = item["text"]
-        image_file = item["image_file"]
+        text = item.get("text", "")
+        # 支持成对数据：cond_image 为缺陷图，gt_image 为目标图；否则回退 image_file
+        cond_file = item.get("cond_image") or item.get("image_file")
+        gt_file = item.get("gt_image") or cond_file
         
-        # read image
-        raw_image = Image.open(os.path.join(self.image_root_path, image_file))
-        image = self.transform(raw_image.convert("RGB"))
-        clip_image = self.clip_image_processor(images=raw_image, return_tensors="pt").pixel_values
+        raw_cond = Image.open(os.path.join(self.image_root_path, cond_file))
+        raw_gt = Image.open(os.path.join(self.image_root_path, gt_file))
+        image = self.transform(raw_gt.convert("RGB"))
+        clip_image = self.clip_image_processor(images=raw_cond, return_tensors="pt").pixel_values
         
         # drop
         drop_image_embed = 0
