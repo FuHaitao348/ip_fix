@@ -8,12 +8,11 @@
 !README.md
 !validate_recon.py
 !outputs/
+!ip_adapter-plus_demo.ipynb
+!tutorial_train.py
+!ip_adapter_demo.ipynb
+!make_defects.py
 
 # But inside ip_adapter, ignore nothing
 !ip_adapter/**
 !outputs/**
-
-# Allow .gitignore itself
-!.gitignore
-__pycache__/
-*.pyc
