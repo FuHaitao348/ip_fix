@@ -28,7 +28,7 @@ else:
 # Dataset
 class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, tokenizer, size=256, t_drop_rate=0.05, i_drop_rate=0.05, ti_drop_rate=0.05, image_root_path=""):
+    def __init__(self, json_file, tokenizer, size=256, t_drop_rate=0, i_drop_rate=0, ti_drop_rate=0, image_root_path=""):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -62,12 +62,12 @@ class MyDataset(torch.utils.data.Dataset):
         drop_image_embed = 0
         rand_num = random.random()
         if rand_num < self.i_drop_rate:
-            drop_image_embed = 1
+            drop_image_embed = 0
         elif rand_num < (self.i_drop_rate + self.t_drop_rate):
             text = ""
         elif rand_num < (self.i_drop_rate + self.t_drop_rate + self.ti_drop_rate):
             text = ""
-            drop_image_embed = 1
+            drop_image_embed = 0
         # get text and tokenize
         text_input_ids = self.tokenizer(
             text,

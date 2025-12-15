@@ -62,12 +62,12 @@ class MyDataset(torch.utils.data.Dataset):
         drop_image_embed = 0
         rand_num = random.random()
         if rand_num < self.i_drop_rate:
-            drop_image_embed = 1
+            drop_image_embed = 0
         elif rand_num < (self.i_drop_rate + self.t_drop_rate):
             text = ""
         elif rand_num < (self.i_drop_rate + self.t_drop_rate + self.ti_drop_rate):
             text = ""
-            drop_image_embed = 1
+            drop_image_embed = 0
         # get text and tokenize
         text_input_ids = self.tokenizer(
             text,
