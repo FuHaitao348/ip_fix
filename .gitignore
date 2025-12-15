@@ -15,3 +15,5 @@
 
 # Allow .gitignore itself
 !.gitignore
+__pycache__/
+*.pyc
